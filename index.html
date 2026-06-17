@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Donkey Adventure 3D - Almost Game</title>
+<style>
+body{margin:0;overflow:hidden;font-family:sans-serif}
+#ui{
+position:absolute;top:10px;left:10px;
+background:rgba(255,255,255,.88);
+padding:12px;border-radius:12px;max-width:420px;
+}
+</style>
+</head>
+<body>
+<div id="ui">
+🐴 Donkey Adventure 3D（ほぼゲーム版）<br>
+W/S：前後移動　←→：回転　Shift：ダッシュ　Space：ジャンプ<br>
+P：セーブ　L：ロード
+<div id="status"></div>
+<div id="mission"></div>
+</div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.167/build/three.module.js';
+import {GLTFLoader} from 'https://cdn.jsdelivr.net/npm/three@0.167/examples/jsm/loaders/GLTFLoader.js';
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x9fd8ff);
+scene.fog=new THREE.Fog(0x9fd8ff,80,300);
+
+const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,0.1,1000);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;
+document.body.appendChild(renderer.domElement);
+
+const ambient=new THREE.AmbientLight(0xffffff,0.5);
+scene.add(ambient);
+const sun=new THREE.DirectionalLight(0xffffff,1.2);
+sun.position.set(60,80,50);
+scene.add(sun);
+
+// terrain
+const ground=new THREE.Mesh(
+ new THREE.PlaneGeometry(800,800,120,120),
+ new THREE.MeshLambertMaterial({color:0x4f9d3a})
+);
+ground.rotation.x=-Math.PI/2;
+const pos=ground.geometry.attributes.position;
+for(let i=0;i<pos.count;i++){
+ const x=pos.getX(i), z=pos.getY(i);
+ pos.setZ(i,Math.sin(x*0.03)*4+Math.cos(z*0.04)*3);
+}
+ground.geometry.computeVertexNormals();
+scene.add(ground);
+
+// river
+const river=new THREE.Mesh(
+ new THREE.BoxGeometry(30,0.2,220),
+ new THREE.MeshPhongMaterial({color:0x44aaff,transparent:true,opacity:0.75})
+);
+river.position.set(50,0.1,0);
+scene.add(river);
+
+// trees
+for(let i=0;i<400;i++){
+ const t=new THREE.Group();
+ const trunk=new THREE.Mesh(
+  new THREE.CylinderGeometry(0.35,0.5,3),
+  new THREE.MeshLambertMaterial({color:0x6b4423})
+ );
+ trunk.position.y=1.5;
+ const leaf=new THREE.Mesh(
+  new THREE.ConeGeometry(2.5,5.5,8),
+  new THREE.MeshLambertMaterial({color:0x1f7a1f})
+ );
+ leaf.position.y=5;
+ t.add(trunk);t.add(leaf);
+ t.position.set((Math.random()-0.5)*350,0,(Math.random()-0.5)*350);
+ if(Math.abs(t.position.x-50)>20) scene.add(t);
+}
+
+let donkey,mixer,actions=[],current=-1;
+const loader=new GLTFLoader();
+
+function playAnimation(index){
+ if(!mixer || !actions.length) return;
+ index=Math.min(index,actions.length-1);
+ if(index===current) return;
+ actions.forEach(a=>a.stop());
+ actions[index].reset().play();
+ current=index;
+}
+
+loader.load("./Donkey.glb",(gltf)=>{
+ donkey=gltf.scene;
+ donkey.scale.set(2,2,2);
+ scene.add(donkey);
+
+ if(gltf.animations.length){
+   mixer=new THREE.AnimationMixer(donkey);
+   actions=gltf.animations.map(c=>mixer.clipAction(c));
+   playAnimation(0); // idle-ish
+ }
+});
+
+// NPC donkeys
+const npcs=[];
+for(let i=0;i<3;i++){
+ loader.load("./Donkey.glb",(gltf)=>{
+   const n=gltf.scene;
+   n.scale.set(1.8,1.8,1.8);
+   n.position.set(-40+i*20,0,-30-i*20);
+   scene.add(n);
+   npcs.push(n);
+ });
+}
+
+const keys={};
+let stamina=100;
+let vy=0,jumping=false;
+let mission=0;
+let time=0;
+
+addEventListener("keydown",e=>{
+ keys[e.key.toLowerCase()]=true;
+
+ if(e.key==="p" && donkey){
+  localStorage.setItem("donkeySave",JSON.stringify({
+   x:donkey.position.x,z:donkey.position.z,
+   r:donkey.rotation.y,s:stamina
+  }));
+ }
+ if(e.key==="l" && donkey){
+  const d=localStorage.getItem("donkeySave");
+  if(d){
+    const s=JSON.parse(d);
+    donkey.position.x=s.x;
+    donkey.position.z=s.z;
+    donkey.rotation.y=s.r;
+    stamina=s.s;
+  }
+ }
+});
+addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+
+const clock=new THREE.Clock();
+
+function loop(){
+ requestAnimationFrame(loop);
+ const dt=clock.getDelta();
+ if(mixer) mixer.update(dt);
+
+ time+=0.002;
+ sun.position.x=Math.sin(time)*120;
+ ambient.intensity=0.2+(Math.cos(time)+1)/2;
+
+ if(donkey){
+   let speed=0.18;
+   let moving=false;
+
+   if(keys["shift"] && stamina>0){
+     speed=0.35;
+     stamina-=0.35;
+     if(actions.length>2) playAnimation(2);
+   }else{
+     stamina=Math.min(100,stamina+0.15);
+   }
+
+   if(keys["arrowleft"]) donkey.rotation.y+=0.04;
+   if(keys["arrowright"]) donkey.rotation.y-=0.04;
+
+   if(keys["w"]){
+      moving=true;
+      donkey.position.x-=Math.sin(donkey.rotation.y)*speed;
+      donkey.position.z-=Math.cos(donkey.rotation.y)*speed;
+      if(actions.length>1 && !keys["shift"]) playAnimation(1);
+   }
+   if(keys["s"]){
+      moving=true;
+      donkey.position.x+=Math.sin(donkey.rotation.y)*speed;
+      donkey.position.z+=Math.cos(donkey.rotation.y)*speed;
+   }
+
+   if(!moving && actions.length) playAnimation(0);
+
+   if(keys[" "] && !jumping){
+      vy=0.3;
+      jumping=true;
+   }
+   vy-=0.012;
+   donkey.position.y+=vy;
+   if(donkey.position.y<0){
+      donkey.position.y=0;
+      vy=0;
+      jumping=false;
+   }
+
+   camera.position.x=donkey.position.x+Math.sin(donkey.rotation.y)*12;
+   camera.position.z=donkey.position.z+Math.cos(donkey.rotation.y)*12;
+   camera.position.y=donkey.position.y+7;
+   camera.lookAt(donkey.position);
+
+   // missions
+   if(mission===0 && donkey.position.x>20) mission=1;
+   if(mission===1 && donkey.position.x>55) mission=2;
+   if(mission===2 && donkey.position.z<-20) mission=3;
+   if(mission===3 && npcs[0]){
+      const d=Math.hypot(
+        donkey.position.x-npcs[0].position.x,
+        donkey.position.z-npcs[0].position.z
+      );
+      if(d<10) mission=4;
+   }
+ }
+
+ npcs.forEach((n,i)=>{
+   n.position.x=Math.sin(time*5+i)*35;
+   n.position.z=Math.cos(time*5+i)*35;
+ });
+
+ document.getElementById("status").textContent =
+  "⚡スタミナ: "+Math.floor(stamina)+"%  "+(Math.cos(time)>0?"☀️昼":"🌙夜");
+
+ const missions = [
+   "➡️ 草原を進む",
+   "🌊 川へ向かう",
+   "🌲 森を探検する",
+   "🐴 NPCとレース地点へ",
+   "🏁 ミッション完了！"
+ ];
+ document.getElementById("mission").textContent = "🎯 "+missions[mission];
+
+ renderer.render(scene,camera);
+}
+loop();
+
+addEventListener("resize",()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
